@@ -3,9 +3,11 @@ package utils
 import (
 	"bytes"
 	"io"
+	"math"
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/pashkov256/deletor/internal/cli/output"
 	"github.com/pashkov256/deletor/internal/utils"
@@ -144,6 +146,94 @@ func TestFormatSize(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if gotFormatSize := utils.FormatSize(tt.args.bytes); gotFormatSize != tt.wantFormatSize {
 				t.Errorf("gotFormatSize = %v\n wantFormatSize = %v", gotFormatSize, tt.wantFormatSize)
+			}
+		})
+	}
+}
+
+func TestParseTimeDuration(t *testing.T) {
+	tests := []struct {
+		name         string
+		input        string
+		wantDuration time.Duration
+		wantErr      bool
+		wantZero     bool // expect zero time.Time (invalid input with no leading digits)
+	}{
+		// Standard units
+		{"1sec", "1sec", 1 * time.Second, false, false},
+		{"2min", "2min", 2 * time.Minute, false, false},
+		{"3hour", "3hour", 3 * time.Hour, false, false},
+		{"4day", "4day", 4 * 24 * time.Hour, false, false},
+		{"5week", "5week", 5 * 7 * 24 * time.Hour, false, false},
+		{"6month", "6month", 6 * 30 * 24 * time.Hour, false, false},
+		{"7year", "7year", 7 * 365 * 24 * time.Hour, false, false},
+
+		// Plural / longer unit names
+		{"10seconds", "10seconds", 10 * time.Second, false, false},
+		{"30minutes", "30minutes", 30 * time.Minute, false, false},
+		{"24hours", "24hours", 24 * time.Hour, false, false},
+		{"2days", "2days", 2 * 24 * time.Hour, false, false},
+		{"2weeks", "2weeks", 2 * 7 * 24 * time.Hour, false, false},
+		{"3months", "3months", 3 * 30 * 24 * time.Hour, false, false},
+		{"1years", "1years", 365 * 24 * time.Hour, false, false},
+
+		// Input with space between number and unit
+		{"space 24 hours", "24 hours", 24 * time.Hour, false, false},
+		{"space 7 day", "7 day", 7 * 24 * time.Hour, false, false},
+
+		// Leading/trailing whitespace
+		{"whitespace", "  12hour  ", 12 * time.Hour, false, false},
+
+		// Upper case input (function lowercases)
+		{"uppercase", "5DAY", 5 * 24 * time.Hour, false, false},
+
+		// Edge: empty string → unitIndex==0 → returns zero time
+		{"empty string", "", 0, false, true},
+
+		// Edge: no number, just unit → unitIndex==0 → returns zero time
+		{"no number", "day", 0, false, true},
+
+		// Unknown unit
+		{"unknown unit", "5xyz", 0, true, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			before := time.Now()
+			got, err := utils.ParseTimeDuration(tt.input)
+			after := time.Now()
+
+			if tt.wantErr {
+				if err == nil {
+					t.Errorf("expected error for input %q, got nil", tt.input)
+				}
+				return
+			}
+
+			if err != nil {
+				t.Errorf("unexpected error for input %q: %v", tt.input, err)
+				return
+			}
+
+			if tt.wantZero {
+				if !got.IsZero() {
+					t.Errorf("expected zero time for input %q, got %v", tt.input, got)
+				}
+				return
+			}
+
+			// The function returns time.Now().Add(-duration).
+			// Verify the result is within a reasonable tolerance (2 seconds).
+			expectedEarliest := before.Add(-tt.wantDuration)
+			expectedLatest := after.Add(-tt.wantDuration)
+
+			diffEarliest := math.Abs(float64(got.Sub(expectedEarliest)))
+			diffLatest := math.Abs(float64(got.Sub(expectedLatest)))
+			minDiff := math.Min(diffEarliest, diffLatest)
+
+			if minDiff > float64(2*time.Second) {
+				t.Errorf("ParseTimeDuration(%q) = %v, expected ~%v ago from now",
+					tt.input, got, tt.wantDuration)
 			}
 		})
 	}
